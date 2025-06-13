@@ -1,0 +1,55 @@
+name: bot
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.number }}-${{ github.event.ref }}
+  cancel-in-progress: true
+on:  # yamllint disable-line rule:truthy
+  pull_request:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  uv-lock:
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    name: uv lock --upgrade
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.UV_LOCK_UPGRADER_APP_ID }}
+          private-key: ${{ secrets.UV_LOCK_UPGRADER_APP_PRIVATE_KEY }}
+      - name: Get GitHub App User ID
+        id: get-user-id
+        run: echo "user-id=$(gh api "/users/${{ steps.app-token.outputs.app-slug }}[bot]" --jq .id)" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv lock --upgrade
+      - uses: peter-evans/create-pull-request@v7
+        env:
+          AUTHOR: "${{ steps.app-token.outputs.app-slug }}[bot] <${{ steps.get-user-id.outputs.user-id }}+${{ steps.app-token.outputs.app-slug }}[bot]@users.noreply.github.com>"
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          author: ${{ env.AUTHOR }}
+          committer: ${{ env.AUTHOR }}
+          commit-message: "chore: upgrade uv.lock"
+          title: "chore: upgrade uv.lock"
+          body: This PR updates the uv.lock file with the latest dependency versions.
+          branch: update-uv-lock
+          delete-branch: true
+
+  auto-merge:
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.user.login == 'uv-lock-upgrader[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable auto-merge for bot PRs
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
